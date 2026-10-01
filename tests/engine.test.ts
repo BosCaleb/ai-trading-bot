@@ -183,3 +183,70 @@ describe('runCycle trade journal', () => {
     expect(result.journal.errors).toEqual([expect.stringMatching(/open (gold|oil): database unavailable/), expect.stringMatching(/database unavailable/)])
   })
 })
+
+describe('runCycle loss limits', () => {
+  beforeEach(() => {
+    vi.stubEnv('ALPACA_API_KEY', 'test')
+    vi.stubEnv('ALPACA_API_SECRET', 'test')
+    vi.stubEnv('BOT_ENABLED', 'true')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  const NOW = new Date()
+  const today = NOW.toISOString().slice(0, 10)
+
+  it('blocks new entries after a 3% daily loss, alerts once, and keeps guarding open positions', async () => {
+    const calls = mockAlpaca({
+      positions: [{ symbol: 'SPY', qty: '10', side: 'long', avg_entry_price: '500', current_price: '505', market_value: '5050', unrealized_pl: '50', unrealized_plpc: '0.01' }],
+    })
+    const store = new MemoryStore()
+    // Day started at 104,000; the mocked account is at 100,000 (-3.85%).
+    await store.saveState({ ...(await store.getState('paper')), dayKey: today, dayStartEquity: 104_000, peakEquity: 104_000 })
+    const sent: string[] = []
+    const notify = async (text: string) => sent.push(text)
+
+    const first = await runCycle('4Hour', { store, now: NOW, notify })
+    expect(first.limits).toMatchObject({ enabled: true, entriesAllowed: false, newlyHalted: 'daily_loss' })
+    expect(first.results.every((r) => r.action === 'blocked')).toBe(true)
+    expect(first.results[0].detail).toMatch(/Daily loss limit/)
+    expect(first.protection[0]).toMatchObject({ symbol: 'SPY', action: 'stop_placed' }) // still protected
+    expect(calls.some((c) => c.method === 'POST' && c.body?.order_class === 'oto')).toBe(false) // no entries
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/PAPER: Daily loss limit.*New entries are paused.*00:00 UTC/)
+
+    const second = await runCycle('4Hour', { store, now: NOW, notify })
+    expect(second.limits.entriesAllowed).toBe(false)
+    expect(sent).toHaveLength(1) // no repeat alert
+    expect((await store.getState('paper')).haltReason).toBe('daily_loss')
+  })
+
+  it('fails closed: live trading without storage takes no new entries', async () => {
+    vi.stubEnv('ALPACA_PAPER', 'false')
+    mockAlpaca()
+    const result = await runCycle('4Hour', { store: null })
+    expect(result.mode).toBe('live')
+    expect(result.limits).toMatchObject({ enabled: false, entriesAllowed: false })
+    expect(result.results.every((r) => r.action === 'blocked' && /connect Supabase/.test(r.detail))).toBe(true)
+  })
+
+  it('paper trading without storage still trades (limits off)', async () => {
+    mockAlpaca()
+    const result = await runCycle('4Hour', { store: null })
+    expect(result.limits).toMatchObject({ enabled: false, entriesAllowed: true })
+    expect(result.results.filter((r) => r.action === 'opened_long')).toHaveLength(2)
+  })
+
+  it('fails closed when the limit state cannot be read', async () => {
+    mockAlpaca()
+    const store = new MemoryStore()
+    store.getState = async () => {
+      throw new Error('timeout')
+    }
+    const result = await runCycle('4Hour', { store })
+    expect(result.limits.entriesAllowed).toBe(false)
+    expect(result.results.every((r) => r.action === 'blocked' && /could not be checked \(timeout\)/.test(r.detail))).toBe(true)
+  })
+})

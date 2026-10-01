@@ -54,7 +54,7 @@ export function Dashboard({ initial }: { initial: DashboardSnapshot }) {
           <OrdersTable orders={snapshot.orders} />
         </div>
         <div className="flex flex-col gap-6">
-          <RiskPanel snapshot={snapshot} />
+          <RiskPanel snapshot={snapshot} onChanged={() => mutate()} />
           <ReportsPanel smsConfigured={snapshot.smsConfigured} configured={snapshot.configured} />
         </div>
       </div>

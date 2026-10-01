@@ -9,8 +9,10 @@ import {
   submitEntry,
   tradingMode,
 } from '@/lib/broker/alpaca'
-import type { StateStore, TradeRecord } from '@/lib/state/store'
+import { isSmsConfigured, sendSms } from '@/lib/notify/sms'
+import type { HaltReason, StateStore, TradeRecord, TradingMode } from '@/lib/state/store'
 import { getStateStore } from '@/lib/state/supabase-store'
+import { evaluateLimits } from './loss-limits'
 import { marketsForTimeframe } from './markets'
 import { type ProtectionResult, ensureStops, knownStopsFrom, openRiskFor } from './protection'
 import { type PendingEntry, applyFilters, positionSize, stopPriceFor } from './risk'
@@ -42,11 +44,55 @@ export interface CycleResult {
   results: MarketCycleResult[]
   /** Whether trades and equity were persisted, and anything that failed doing so */
   journal: { enabled: boolean; errors: string[] }
+  /** Daily loss and drawdown circuit breakers for this cycle */
+  limits: LimitsResult
+}
+
+export interface LimitsResult {
+  /** False when there is no state store to measure against */
+  enabled: boolean
+  entriesAllowed: boolean
+  reason: string | null
+  newlyHalted: HaltReason | null
+  dayChangePct: number | null
+  drawdownPct: number | null
 }
 
 export interface CycleDeps {
   /** Defaults to Supabase when configured; null runs without persistence */
   store?: StateStore | null
+  /** Clock for the loss-limit trading day (tests) */
+  now?: Date
+  /** Sends halt alerts; defaults to BulkSMS when configured */
+  notify?: ((text: string) => Promise<unknown>) | null
+}
+
+/**
+ * Loads, evaluates and saves the loss-limit state. Fails closed: if the limits cannot be checked,
+ * new entries are blocked (exits and stops are unaffected). Paper trading without storage is the
+ * one exception, so the bot can be tried out before Supabase is connected.
+ */
+async function checkLossLimits(store: StateStore | null, mode: TradingMode, equity: number, now: Date): Promise<LimitsResult> {
+  const off = { newlyHalted: null, dayChangePct: null, drawdownPct: null }
+  if (!store) {
+    return mode === 'live'
+      ? { enabled: false, entriesAllowed: false, reason: 'Loss limits need storage: connect Supabase before live trading', ...off }
+      : { enabled: false, entriesAllowed: true, reason: null, ...off }
+  }
+  try {
+    const evaluation = evaluateLimits(await store.getState(mode), equity, now)
+    await store.saveState(evaluation.state)
+    return {
+      enabled: true,
+      entriesAllowed: evaluation.entriesAllowed,
+      reason: evaluation.reason,
+      newlyHalted: evaluation.newlyHalted,
+      dayChangePct: evaluation.dayChangePct,
+      drawdownPct: evaluation.drawdownPct,
+    }
+  } catch (err) {
+    return { enabled: true, entriesAllowed: false, reason: `Loss limits could not be checked (${(err as Error).message}); new entries blocked`, ...off }
+  }
 }
 
 export function botEnabled(): boolean {
@@ -110,6 +156,18 @@ export async function runCycle(timeframe: Timeframe, deps: CycleDeps = {}): Prom
     )
   }
   await journal('record equity', (s) => s.recordEquity(mode, account.equity, `cycle:${timeframe}`))
+
+  const limits = await checkLossLimits(store, mode, account.equity, deps.now ?? new Date())
+  if (limits.newlyHalted) {
+    const notify = deps.notify === undefined ? (isSmsConfigured() ? sendSms : null) : deps.notify
+    const next = limits.newlyHalted === 'drawdown' ? 'Review, then resume from the dashboard.' : 'Entries resume at the next trading day (00:00 UTC).'
+    const text = `Trading desk ${mode.toUpperCase()}: ${limits.reason}. New entries are paused; open positions and stops are still managed. ${next}`
+    try {
+      await notify?.(text)
+    } catch (err) {
+      journalErrors.push(`halt alert: ${(err as Error).message}`)
+    }
+  }
 
   const evaluations = await Promise.all(
     markets.map(async (market) => {
@@ -197,6 +255,11 @@ export async function runCycle(timeframe: Timeframe, deps: CycleDeps = {}): Prom
         continue
       }
 
+      if (!limits.entriesAllowed) {
+        results.push({ ...base, action: 'blocked', detail: `${limits.reason}. Signal: ${signal.reason}` })
+        continue
+      }
+
       const side = signal.action === 'enter_long' ? 'long' : 'short'
       const atrPct = signal.metrics.atrPct ?? market.baselineAtrPct
       const sizing = positionSize({ equity: account.equity, price: price ?? 0, atrPct, market })
@@ -280,5 +343,6 @@ export async function runCycle(timeframe: Timeframe, deps: CycleDeps = {}): Prom
     protection,
     results,
     journal: { enabled: Boolean(store), errors: journalErrors },
+    limits,
   }
 }

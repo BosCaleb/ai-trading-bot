@@ -16,7 +16,7 @@ export function DeskHeader({
   onRefresh: () => void
 }) {
   const live = snapshot.mode === 'live'
-  const running = snapshot.configured && snapshot.botEnabled && !snapshot.error
+  const running = snapshot.configured && snapshot.botEnabled && !snapshot.error && !snapshot.limits.halted
 
   return (
     <header className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
@@ -41,7 +41,17 @@ export function DeskHeader({
         <Status
           dot={running ? 'bg-positive' : snapshot.configured ? 'bg-primary' : 'bg-muted-foreground'}
           pulse={running}
-          label={running ? 'Bot running' : snapshot.configured ? (snapshot.botEnabled ? 'Broker error' : 'Bot paused') : 'Broker offline'}
+          label={
+            running
+              ? 'Bot running'
+              : !snapshot.configured
+                ? 'Broker offline'
+                : !snapshot.botEnabled
+                  ? 'Bot paused'
+                  : snapshot.limits.halted
+                    ? 'Entries halted'
+                    : 'Broker error'
+          }
         />
         <Status
           dot={snapshot.clock?.isOpen ? 'bg-positive' : 'bg-muted-foreground'}

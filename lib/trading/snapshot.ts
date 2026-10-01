@@ -14,7 +14,9 @@ import {
   tradingMode,
 } from '@/lib/broker/alpaca'
 import { isSmsConfigured } from '@/lib/notify/sms'
-import { isStateStoreConfigured } from '@/lib/state/supabase-store'
+import type { HaltReason } from '@/lib/state/store'
+import { getStateStore, isStateStoreConfigured } from '@/lib/state/supabase-store'
+import { LIMITS, LOSS_LIMIT_RULES, evaluateLimits } from './loss-limits'
 import { botEnabled, evaluateMarket, positionFor } from './engine'
 import { MARKETS, TIMEFRAME_META } from './markets'
 import { openRiskFor, stopCoverage } from './protection'
@@ -51,8 +53,20 @@ export interface DashboardSnapshot {
   markets: MarketSnapshot[]
   orders: OrderInfo[]
   history: EquityPoint[]
+  /** Loss-limit status as the next cycle will see it (read-only; only the cron saves state) */
+  limits: {
+    enabled: boolean
+    halted: boolean
+    haltReason: HaltReason | null
+    reason: string | null
+    dayChangePct: number | null
+    drawdownPct: number | null
+    dailyLossPct: number
+    maxDrawdownPct: number
+    error: string | null
+  }
   risk: {
-    rules: typeof RISK_RULES
+    rules: { id: string; title: string; detail: string }[]
     riskPerTradePct: number
     maxOpenRiskPct: number
     maxLeverage: number
@@ -96,8 +110,19 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
     markets: MARKETS.map((m) => emptyMarket(m)),
     orders: [],
     history: [],
+    limits: {
+      enabled: false,
+      halted: false,
+      haltReason: null,
+      reason: null,
+      dayChangePct: null,
+      drawdownPct: null,
+      dailyLossPct: LIMITS.dailyLossPct,
+      maxDrawdownPct: LIMITS.maxDrawdownPct,
+      error: null,
+    },
     risk: {
-      rules: RISK_RULES,
+      rules: [...RISK_RULES, ...LOSS_LIMIT_RULES],
       riskPerTradePct: RISK.riskPerTradePct,
       maxOpenRiskPct: RISK.maxOpenRiskPct,
       maxLeverage: RISK.maxLeverage,
@@ -165,6 +190,25 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
       }),
     )
 
+    let limits = base.limits
+    const store = getStateStore()
+    if (store) {
+      try {
+        const evaluation = evaluateLimits(await store.getState(base.mode), account.equity, new Date())
+        limits = {
+          ...limits,
+          enabled: true,
+          halted: !evaluation.entriesAllowed,
+          haltReason: evaluation.state.haltReason,
+          reason: evaluation.reason,
+          dayChangePct: evaluation.dayChangePct,
+          drawdownPct: evaluation.drawdownPct,
+        }
+      } catch (err) {
+        limits = { ...limits, enabled: true, halted: true, error: (err as Error).message }
+      }
+    }
+
     const gross = positions.reduce((sum, p) => sum + Math.abs(p.marketValue), 0)
     const openRisk = openRiskFor(positions, openOrders)
     const corr = correlationFilterState(positions)
@@ -173,6 +217,7 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
       ...base,
       account,
       clock,
+      limits,
       orders,
       history,
       markets,

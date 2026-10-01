@@ -20,6 +20,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ time
     const repairs = result.protection.filter((p) => p.action !== 'covered')
     if (repairs.length) console.warn(`[cron:${slug}:stops]`, JSON.stringify(repairs))
     if (result.journal.errors.length) console.error(`[cron:${slug}:journal]`, JSON.stringify(result.journal.errors))
+    if (!result.limits.entriesAllowed) console.warn(`[cron:${slug}:limits]`, result.limits.reason)
     console.log(`[cron:${slug}]`, JSON.stringify(result.results.map((r) => ({ m: r.marketId, a: r.action, d: r.detail }))))
     return Response.json(result)
   } catch (err) {

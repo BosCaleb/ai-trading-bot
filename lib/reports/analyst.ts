@@ -46,6 +46,13 @@ export function describeSnapshot(snapshot: DashboardSnapshot): string {
       `Account: equity ${money(a.equity)}, cash ${money(a.cash)}, day P&L ${money(a.dayPl)} (${pct(a.dayPlPct)}), leverage ${snapshot.risk.grossExposurePct.toFixed(2)}x (cap ${snapshot.risk.maxLeverage}x), open risk at stops ${money(snapshot.risk.openRisk)} (${pct(snapshot.risk.openRiskPct)}, cap ${pct(snapshot.risk.maxOpenRiskPct, 0)}).`,
     )
   }
+  if (snapshot.limits.halted) {
+    lines.push(`NEW ENTRIES HALTED: ${snapshot.limits.error ?? snapshot.limits.reason}. Open positions and stops are still managed.`)
+  } else if (snapshot.limits.enabled) {
+    lines.push(
+      `Loss limits OK: today ${pct(snapshot.limits.dayChangePct)} (halt at -${pct(snapshot.limits.dailyLossPct, 0).slice(1)}), ${pct(snapshot.limits.drawdownPct)} from peak (halt at -${pct(snapshot.limits.maxDrawdownPct, 0).slice(1)}).`,
+    )
+  }
   if (snapshot.clock) {
     lines.push(`US equity session: ${snapshot.clock.isOpen ? 'OPEN' : 'CLOSED'}. Next open ${snapshot.clock.nextOpen}, next close ${snapshot.clock.nextClose}.`)
   }

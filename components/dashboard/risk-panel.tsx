@@ -2,9 +2,10 @@ import { ShieldCheck } from 'lucide-react'
 import { fmtPct } from '@/lib/format'
 import type { DashboardSnapshot } from '@/lib/trading/snapshot'
 import { cn } from '@/lib/utils'
+import { TradingControl } from './trading-control'
 
-export function RiskPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
-  const { risk } = snapshot
+export function RiskPanel({ snapshot, onChanged }: { snapshot: DashboardSnapshot; onChanged?: () => void }) {
+  const { risk, limits } = snapshot
   const openCount = snapshot.markets.filter((m) => m.position).length
 
   const liveState: Record<string, { text: string; tone: 'ok' | 'active' | 'idle' }> = {
@@ -38,6 +39,24 @@ export function RiskPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
       tone: risk.grossExposurePct > risk.maxLeverage * 0.8 ? 'active' : 'idle',
     },
     one: { text: `${openCount} of 5 markets in a position`, tone: 'idle' },
+    daily: limits.enabled
+      ? {
+          text:
+            limits.haltReason === 'daily_loss'
+              ? 'Triggered. Entries resume next trading day.'
+              : `Today ${fmtPct(limits.dayChangePct, 2)} vs -${fmtPct(limits.dailyLossPct, 0, false)} limit`,
+          tone: limits.haltReason === 'daily_loss' ? 'active' : 'idle',
+        }
+      : { text: 'Needs storage', tone: 'idle' },
+    drawdown: limits.enabled
+      ? {
+          text:
+            limits.haltReason === 'drawdown'
+              ? 'Triggered. Review, then resume.'
+              : `${fmtPct(limits.drawdownPct, 2)} from peak vs -${fmtPct(limits.maxDrawdownPct, 0, false)} limit`,
+          tone: limits.haltReason === 'drawdown' ? 'active' : 'idle',
+        }
+      : { text: 'Needs storage', tone: 'idle' },
   }
 
   return (
@@ -48,6 +67,7 @@ export function RiskPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           Built-in protection
         </h2>
       </div>
+      <TradingControl snapshot={snapshot} onChanged={onChanged} />
       <ul className="flex flex-col divide-y divide-border">
         {risk.rules.map((rule) => {
           const state = liveState[rule.id]
