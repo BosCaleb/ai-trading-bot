@@ -34,7 +34,7 @@ function headers(): Record<string, string> {
   }
 }
 
-async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers(), ...(init?.headers ?? {}) }, cache: 'no-store' })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
@@ -165,6 +165,12 @@ export async function getOrder(id: string): Promise<OrderInfo> {
   return mapOrder(await request<AlpacaOrder>(tradingBase(), `/v2/orders/${id}`))
 }
 
+/** Every working order, listed flat (not nested) so OTO stop legs show up as their own rows. */
+export async function getOpenOrders(): Promise<OrderInfo[]> {
+  const rows = await request<AlpacaOrder[]>(tradingBase(), '/v2/orders?status=open&limit=500&nested=false')
+  return rows.map(mapOrder)
+}
+
 interface AlpacaPortfolioHistory {
   timestamp: number[]
   equity: (number | null)[]
@@ -187,7 +193,7 @@ export async function getPortfolioHistory(period = '1M', timeframe = '1D'): Prom
     .filter((p): p is EquityPoint => typeof p.equity === 'number' && p.equity > 0)
 }
 
-interface AlpacaBar {
+export interface AlpacaBar {
   t: string
   o: number
   h: number
@@ -196,7 +202,7 @@ interface AlpacaBar {
   v: number
 }
 
-interface StockBarsResponse {
+export interface StockBarsResponse {
   bars: Record<string, AlpacaBar[] | undefined>
   next_page_token: string | null
 }
@@ -216,7 +222,7 @@ function minutesIntoEasternDay(ms: number): number {
 }
 
 /** Regular US session is 09:30-16:00 ET. Intraday index bars outside it are thin and distort the mean. */
-function isRegularSession(ms: number): boolean {
+export function isRegularSession(ms: number): boolean {
   const m = minutesIntoEasternDay(ms)
   return m >= 9 * 60 + 30 && m < 16 * 60
 }
@@ -281,15 +287,48 @@ async function waitForFill(orderId: string, attempts = 6): Promise<OrderInfo> {
   return order
 }
 
+/** Crypto stops are stop-limits; the limit sits this far beyond the trigger so a fast move still fills. */
+const CRYPTO_STOP_LIMIT_BUFFER = 0.005
+
+/**
+ * Places a standalone good-til-cancelled stop that flattens `qty` of a position.
+ * Equities get a plain stop (market on trigger); crypto only accepts stop-limit.
+ */
+export async function submitProtectiveStop(input: {
+  market: MarketConfig
+  side: 'long' | 'short'
+  qty: number
+  stopPrice: number
+}): Promise<OrderInfo> {
+  const { market, side, qty, stopPrice } = input
+  const exitSide = side === 'long' ? 'sell' : 'buy'
+  const body: Record<string, string> = {
+    symbol: market.symbol,
+    qty: String(qty),
+    side: exitSide,
+    time_in_force: 'gtc',
+    stop_price: stopPrice.toFixed(2),
+  }
+  if (market.assetClass === 'crypto') {
+    const buffer = side === 'long' ? 1 - CRYPTO_STOP_LIMIT_BUFFER : 1 + CRYPTO_STOP_LIMIT_BUFFER
+    body.type = 'stop_limit'
+    body.limit_price = (stopPrice * buffer).toFixed(2)
+  } else {
+    body.type = 'stop'
+  }
+  return mapOrder(await request<AlpacaOrder>(tradingBase(), '/v2/orders', { method: 'POST', body: JSON.stringify(body) }))
+}
+
 /**
  * Submits the entry and its protective stop.
  * Equities use a one-triggers-other order so the stop is attached atomically at the broker.
+ * The OTO is good-til-cancelled: with `day`, Alpaca cancels the stop leg at the close and any
+ * position carried overnight would sit unprotected.
  * Crypto does not support OTO, so a stop-limit is submitted right after the market fill.
  */
 export async function submitEntry(input: EntryOrderInput): Promise<EntryOrderResult> {
   const { market, side, qty, stopPrice } = input
   const orderSide = side === 'long' ? 'buy' : 'sell'
-  const exitSide = side === 'long' ? 'sell' : 'buy'
 
   if (market.assetClass === 'us_equity') {
     const order = await request<AlpacaOrder>(tradingBase(), '/v2/orders', {
@@ -299,7 +338,7 @@ export async function submitEntry(input: EntryOrderInput): Promise<EntryOrderRes
         qty: String(qty),
         side: orderSide,
         type: 'market',
-        time_in_force: 'day',
+        time_in_force: 'gtc',
         order_class: 'oto',
         stop_loss: { stop_price: stopPrice.toFixed(2) },
       }),
@@ -325,24 +364,12 @@ export async function submitEntry(input: EntryOrderInput): Promise<EntryOrderRes
   })
   const filled = await waitForFill(order.id)
   const fillPrice = filled.filledAvgPrice ?? input.referencePrice
-  const actualStop = side === 'long' ? fillPrice * 0.99 : fillPrice * 1.01
-  const limitBuffer = side === 'long' ? 0.995 : 1.005
+  const actualStop = Number((side === 'long' ? fillPrice * 0.99 : fillPrice * 1.01).toFixed(2))
   const filledQty = filled.filledQty > 0 ? filled.filledQty : qty
 
-  const stop = await request<AlpacaOrder>(tradingBase(), '/v2/orders', {
-    method: 'POST',
-    body: JSON.stringify({
-      symbol: market.symbol,
-      qty: String(filledQty),
-      side: exitSide,
-      type: 'stop_limit',
-      time_in_force: 'gtc',
-      stop_price: actualStop.toFixed(2),
-      limit_price: (actualStop * limitBuffer).toFixed(2),
-    }),
-  })
+  const stop = await submitProtectiveStop({ market, side, qty: filledQty, stopPrice: actualStop })
 
-  return { orderId: order.id, stopOrderId: stop.id, fillPrice, stopPrice: Number(actualStop.toFixed(2)) }
+  return { orderId: order.id, stopOrderId: stop.id, fillPrice, stopPrice: actualStop }
 }
 
 /** Flattens the position and cancels any resting stop orders for it. */

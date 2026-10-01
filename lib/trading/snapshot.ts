@@ -6,6 +6,7 @@ import {
   getAccount,
   getBars,
   getClock,
+  getOpenOrders,
   getOrders,
   getPortfolioHistory,
   getPositions,
@@ -15,7 +16,8 @@ import {
 import { isSmsConfigured } from '@/lib/notify/sms'
 import { botEnabled, evaluateMarket, positionFor } from './engine'
 import { MARKETS, TIMEFRAME_META } from './markets'
-import { RISK, RISK_RULES, correlationFilterState, positionSize, stopPriceFor } from './risk'
+import { stopCoverage } from './protection'
+import { RISK, RISK_RULES, correlationFilterState, positionSize } from './risk'
 import type { MarketConfig, OrderInfo, PositionInfo, Signal } from './types'
 
 export interface MarketSnapshot {
@@ -25,7 +27,10 @@ export interface MarketSnapshot {
   atrPct: number | null
   signal: Signal | null
   position: PositionInfo | null
+  /** Tightest stop actually working at the broker for the open position */
   stopPrice: number | null
+  /** False when a position is open without full stop coverage at the broker */
+  stopCovered: boolean
   nextSize: { qty: number; notional: number; volScalar: number } | null
   lastBarAt: string | null
   error: string | null
@@ -61,6 +66,7 @@ function emptyMarket(config: MarketConfig, error: string | null = null): MarketS
     signal: null,
     position: null,
     stopPrice: null,
+    stopCovered: true,
     nextSize: null,
     lastBarAt: null,
     error,
@@ -92,11 +98,12 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
   if (!base.configured) return base
 
   try {
-    const [account, positions, clock, orders, history] = await Promise.all([
+    const [account, positions, clock, orders, openOrders, history] = await Promise.all([
       getAccount(),
       getPositions(),
       getClock(),
       getOrders(40),
+      getOpenOrders(),
       getPortfolioHistory('1M', '1D').catch(() => [] as EquityPoint[]),
     ])
 
@@ -112,6 +119,7 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
           const ref = bars[bars.length - 1 - barsBack]
           const change24hPct = ref && lastBar ? (lastBar.c - ref.c) / ref.c : null
           const atrPct = signal.metrics.atrPct ?? null
+          const coverage = position ? stopCoverage(position, openOrders) : null
           const nextSize =
             price && atrPct ? positionSize({ equity: account.equity, price, atrPct, market: config }) : null
           return {
@@ -121,7 +129,8 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
             atrPct,
             signal,
             position,
-            stopPrice: position ? stopPriceFor(position.avgEntry, position.side) : null,
+            stopPrice: coverage?.stopPrice ?? null,
+            stopCovered: !position || !coverage || coverage.coveredQty >= position.qty - 1e-6,
             nextSize: nextSize ? { qty: nextSize.qty, notional: nextSize.notional, volScalar: nextSize.volScalar } : null,
             lastBarAt: lastBar ? new Date(lastBar.t).toISOString() : null,
             error: null,

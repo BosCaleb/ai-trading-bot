@@ -15,7 +15,8 @@ export const RISK_RULES = [
   {
     id: 'stop',
     title: 'Hard 1% stop on every trade',
-    detail: 'Each entry is submitted with a broker-side stop 1% from the fill. It lives at the broker, so it fires even if this app is down.',
+    detail:
+      'Each entry is submitted with a good-til-cancelled stop 1% from the fill. It lives at the broker, so it fires even if this app is down, and survives overnight. Every cycle re-checks coverage and restores any missing stop.',
   },
   {
     id: 'vol',

@@ -4,11 +4,13 @@ import {
   getAccount,
   getBars,
   getClock,
+  getOpenOrders,
   getPositions,
   submitEntry,
   tradingMode,
 } from '@/lib/broker/alpaca'
 import { marketsForTimeframe } from './markets'
+import { type ProtectionResult, ensureStops } from './protection'
 import { applyFilters, positionSize, stopPriceFor } from './risk'
 import { STRATEGIES } from './strategies'
 import type { MarketConfig, PositionInfo, PositionSide, Signal, Timeframe } from './types'
@@ -33,6 +35,8 @@ export interface CycleResult {
   ranAt: string
   botEnabled: boolean
   equityMarketOpen: boolean
+  /** Stop-guardian pass over every open position, run before any new signals */
+  protection: ProtectionResult[]
   results: MarketCycleResult[]
 }
 
@@ -56,8 +60,14 @@ export function evaluateMarket(market: MarketConfig, bars: ReturnType<typeof clo
  */
 export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
   const markets = marketsForTimeframe(timeframe)
-  const [account, positions, clock] = await Promise.all([getAccount(), getPositions(), getClock()])
+  const [account, allPositions, clock, openOrders] = await Promise.all([getAccount(), getPositions(), getClock(), getOpenOrders()])
   const enabled = botEnabled()
+
+  // Protect what is already open before acting on anything new. Positions the guardian had to
+  // close are dropped so strategies don't also try to exit them.
+  const protection = await ensureStops(allPositions, openOrders, clock.isOpen)
+  const closedByGuardian = new Set(protection.filter((p) => p.action === 'closed_breached').map((p) => p.symbol))
+  const positions = allPositions.filter((p) => !closedByGuardian.has(p.symbol))
 
   const evaluations = await Promise.all(
     markets.map(async (market) => {
@@ -189,6 +199,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
     ranAt: new Date().toISOString(),
     botEnabled: enabled,
     equityMarketOpen: clock.isOpen,
+    protection,
     results,
   }
 }

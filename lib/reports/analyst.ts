@@ -69,7 +69,7 @@ export function describeSnapshot(snapshot: DashboardSnapshot): string {
     if (m.atrPct) parts.push(`ATR ${pct(m.atrPct)} per bar`)
     if (m.position) {
       parts.push(
-        `POSITION ${m.position.side.toUpperCase()} ${m.position.qty} @ ${m.position.avgEntry.toFixed(2)}, unrealized ${money(m.position.unrealizedPl)} (${pct(m.position.unrealizedPlPct)}), stop ${m.stopPrice?.toFixed(2)}`,
+        `POSITION ${m.position.side.toUpperCase()} ${m.position.qty} @ ${m.position.avgEntry.toFixed(2)}, unrealized ${money(m.position.unrealizedPl)} (${pct(m.position.unrealizedPlPct)}), ${m.stopCovered ? `stop ${m.stopPrice?.toFixed(2)}` : 'NO WORKING STOP (guardian will repair next cycle)'}`,
       )
     } else {
       parts.push('flat')
