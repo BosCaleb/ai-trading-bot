@@ -67,7 +67,11 @@ export function MarketCard({ market, configured }: { market: MarketSnapshot; con
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-md bg-background/60 p-3 font-mono text-xs tabular">
           <Row label="Size" value={`${fmtQty(position.qty)} @ ${fmtPrice(position.avgEntry, config.displaySymbol)}`} />
           <Row label="Unrealized" value={`${fmtMoney(position.unrealizedPl, { signed: true })}`} tone={plClass(position.unrealizedPl)} />
-          <Row label="Stop" value={fmtPrice(stopPrice, config.displaySymbol)} tone="text-negative" />
+          <Row
+            label="Stop"
+            value={market.stopCovered ? fmtPrice(stopPrice, config.displaySymbol) : 'UNPROTECTED'}
+            tone={market.stopCovered ? 'text-negative' : 'font-semibold text-negative'}
+          />
           <Row label="Notional" value={fmtMoney(Math.abs(position.marketValue), { compact: true })} />
         </dl>
       ) : (
