@@ -13,14 +13,15 @@ import { computeMetrics, type BacktestMetrics } from './metrics'
  *   close and sends a market order), plus adverse slippage and fees.
  * - US equity signals are dropped when the regular session is closed at the bar's close, mirroring
  *   the live `market_closed` deferral. Crypto trades 24/7.
- * - Every entry carries the 1% stop. Equities anchor it to the signal close (what the OTO order
- *   uses), crypto to the fill (stop submitted after the fill). The stop is checked intrabar on
- *   every bar the position is open, including the entry bar; a gap through the stop fills at the
- *   open, not at the stop.
- * - Sizing uses the live volatility-scaled `positionSize` against marked-to-market equity.
+ * - Every entry carries the live ATR-based stop. The distance is fixed at the signal; equities
+ *   anchor it to the signal close (what the OTO order uses), crypto to the fill (stop submitted
+ *   after the fill). The stop is checked intrabar on every bar the position is open, including
+ *   the entry bar; a gap through the stop fills at the open, not at the stop.
+ * - Sizing uses the live risk-based `positionSize` (1% of marked-to-market equity at the stop,
+ *   leverage-capped, broker minimums respected); trades it would skip are skipped here too.
  *
- * Not modelled: the portfolio-level correlation filter and gross cap (they need several markets
- * at once), borrow costs on shorts, partial fills, and stop-limit orders failing to fill in a
+ * Not modelled: the portfolio-level correlation filter, combined open-risk cap and cross-market
+ * leverage cap (they need several markets at once), borrow costs on shorts, partial fills, and stop-limit orders failing to fill in a
  * crypto gap (stops are treated as always filling).
  */
 
@@ -67,7 +68,9 @@ export interface Trade {
   pnl: number
   /** pnl / entry notional */
   returnPct: number
-  /** pnl in units of the planned 1% risk (entry notional x 1%) */
+  /** Planned loss at the initial stop (qty x stop distance) */
+  riskAmount: number
+  /** pnl in units of the planned risk */
   rMultiple: number
   entryReason: string
   exitDetail: string
@@ -90,8 +93,8 @@ export interface BacktestResult {
   equityCurve: EquityPoint[]
   /** Signals the session filter dropped (equities only) */
   skippedClosedSession: number
-  /** Entries skipped because the volatility-scaled size rounded to zero */
-  skippedZeroSize: number
+  /** Entries skipped because the broker minimum would risk more than the budget */
+  skippedTooSmall: number
   metrics: BacktestMetrics
 }
 
@@ -109,6 +112,7 @@ interface OpenPosition {
   entryPrice: number
   stopPrice: number
   entryFee: number
+  riskAmount: number
   entryReason: string
 }
 
@@ -118,6 +122,8 @@ interface PendingOrder {
   qty: number
   /** Signal-bar close: the reference price the live engine anchors equity stops to */
   referencePrice: number
+  /** Stop distance fixed at the signal */
+  stopDistance: number
   reason: string
 }
 
@@ -146,7 +152,7 @@ export function runBacktest(opts: BacktestOptions): BacktestResult {
   const trades: Trade[] = []
   const equityCurve: EquityPoint[] = []
   let skippedClosedSession = 0
-  let skippedZeroSize = 0
+  let skippedTooSmall = 0
 
   const markToMarket = (price: number) =>
     position ? cash + sideSign(position.side) * position.qty * price : cash
@@ -173,7 +179,8 @@ export function runBacktest(opts: BacktestOptions): BacktestResult {
       barsHeld: exitIndex - position.entryIndex + 1,
       pnl,
       returnPct: entryNotional > 0 ? pnl / entryNotional : 0,
-      rMultiple: entryNotional > 0 ? pnl / (entryNotional * 0.01) : 0,
+      riskAmount: position.riskAmount,
+      rMultiple: position.riskAmount > 0 ? pnl / position.riskAmount : 0,
       entryReason: position.entryReason,
       exitDetail: detail,
     })
@@ -199,8 +206,9 @@ export function runBacktest(opts: BacktestOptions): BacktestResult {
           entryTime: bar.t,
           entryIndex: i,
           entryPrice,
-          stopPrice: stopPriceFor(anchor, pending.side),
+          stopPrice: stopPriceFor(anchor, pending.side, pending.stopDistance),
           entryFee,
+          riskAmount: pending.qty * pending.stopDistance,
           entryReason: pending.reason,
         }
       }
@@ -232,7 +240,7 @@ export function runBacktest(opts: BacktestOptions): BacktestResult {
     }
 
     if (signal.action === 'exit') {
-      if (position) pending = { kind: 'exit', side: position.side, qty: position.qty, referencePrice: bar.c, reason: signal.reason }
+      if (position) pending = { kind: 'exit', side: position.side, qty: position.qty, referencePrice: bar.c, stopDistance: 0, reason: signal.reason }
       continue
     }
 
@@ -241,11 +249,11 @@ export function runBacktest(opts: BacktestOptions): BacktestResult {
     if (entrySide === 'short' && !market.allowShort) continue
     const atrPct = signal.metrics.atrPct ?? market.baselineAtrPct
     const sizing = positionSize({ equity: markToMarket(bar.c), price: bar.c, atrPct, market })
-    if (sizing.qty <= 0) {
-      skippedZeroSize++
+    if (sizing.skipReason) {
+      skippedTooSmall++
       continue
     }
-    pending = { kind: 'enter', side: entrySide, qty: sizing.qty, referencePrice: bar.c, reason: signal.reason }
+    pending = { kind: 'enter', side: entrySide, qty: sizing.qty, referencePrice: bar.c, stopDistance: sizing.stopDistance, reason: signal.reason }
   }
 
   const last = bars[bars.length - 1]
@@ -265,7 +273,7 @@ export function runBacktest(opts: BacktestOptions): BacktestResult {
     trades,
     equityCurve,
     skippedClosedSession,
-    skippedZeroSize,
+    skippedTooSmall,
     metrics: computeMetrics({ trades, equityCurve, initialEquity, bars, barMs: BAR_MS[market.timeframe] }),
   }
 }

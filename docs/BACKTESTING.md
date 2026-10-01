@@ -35,21 +35,21 @@ Override with `--fee-bps` and `--slippage-bps`. Always rerun with doubled costs 
 | Market order 1-3 min after the bar closes              | Fills at the next bar's open + slippage           |
 | Equity signals deferred while the US session is closed | Dropped when the session is closed at the bar close |
 | 15m index bars restricted to the regular session       | Same filter                                       |
-| 1% stop: equities from signal close, crypto from fill  | Same anchors, checked intrabar; gaps fill at the open |
-| Volatility-scaled sizing on current equity             | Same `positionSize` on marked-to-market equity    |
+| ATR stop: equities from signal close, crypto from fill | Same distance and anchors, checked intrabar; gaps fill at the open |
+| 1% of equity at risk, leverage cap, broker minimums    | Same `positionSize` on marked-to-market equity; too-small trades skipped |
 
-**Not modelled:** the cross-market correlation filter and gross-exposure cap (each market runs
-alone on full starting equity), short borrow fees, partial fills, and crypto stop-limits that fail
+**Not modelled:** the cross-market correlation filter, combined 3% open-risk cap and cross-market
+leverage cap (each market runs alone on full starting equity), short borrow fees, partial fills, and crypto stop-limits that fail
 to fill in a fast move.
 
 ## Reading the summary
 
 - **Return vs B&H**: strategy return against simply holding the instrument over the same bars.
-- **Exp(R)**: average trade in units of the planned 1% risk. Above roughly +0.1R after costs is
+- **Exp(R)**: average trade in units of its planned risk (1% of equity at the stop). Above roughly +0.1R after costs is
   interesting; below zero means the edge does not survive costs.
 - **PF**: gross profit / gross loss. Under 1.0 loses money.
-- **Stops**: how many exits were stop-outs. A high share means the 1% stop sits inside normal noise
-  for that market and timeframe.
+- **Stops**: how many exits were stop-outs. A high share means the ATR stop multiple is too tight for
+  that market and timeframe.
 - Few trades (under ~30) means the numbers are mostly noise.
 
 ## A sensible bar before going live

@@ -268,7 +268,10 @@ export interface EntryOrderInput {
   side: 'long' | 'short'
   qty: number
   referencePrice: number
+  /** Stop for the OTO equity order, anchored to referencePrice */
   stopPrice: number
+  /** Stop distance in price units; crypto re-anchors it to the actual fill */
+  stopDistance: number
 }
 
 export interface EntryOrderResult {
@@ -364,7 +367,7 @@ export async function submitEntry(input: EntryOrderInput): Promise<EntryOrderRes
   })
   const filled = await waitForFill(order.id)
   const fillPrice = filled.filledAvgPrice ?? input.referencePrice
-  const actualStop = Number((side === 'long' ? fillPrice * 0.99 : fillPrice * 1.01).toFixed(2))
+  const actualStop = Number((side === 'long' ? fillPrice - input.stopDistance : fillPrice + input.stopDistance).toFixed(2))
   const filledQty = filled.filledQty > 0 ? filled.filledQty : qty
 
   const stop = await submitProtectiveStop({ market, side, qty: filledQty, stopPrice: actualStop })

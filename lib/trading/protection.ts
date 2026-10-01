@@ -1,6 +1,6 @@
 import { closePosition, submitProtectiveStop } from '@/lib/broker/alpaca'
 import { marketBySymbol } from './markets'
-import { stopPriceFor } from './risk'
+import { positionRisk, stopDistanceFor, stopPriceFor } from './risk'
 import type { MarketConfig, MarketId, OrderInfo, PositionInfo } from './types'
 
 /**
@@ -43,6 +43,32 @@ export type ProtectionPlan =
 const QTY_EPSILON = 1e-6
 
 /**
+ * Where a stop belongs when the broker has none for a position. The original ATR at entry is not
+ * known here, so the market's typical ATR stands in until trade records are persisted.
+ */
+export function fallbackStopPrice(position: PositionInfo, market: MarketConfig): number {
+  return stopPriceFor(position.avgEntry, position.side, stopDistanceFor(position.avgEntry, market.baselineAtrPct, market))
+}
+
+function roundToStep(qty: number, step: number): number {
+  const decimals = Math.max(0, Math.ceil(-Math.log10(step)))
+  return Number((Math.round(qty / step) * step).toFixed(decimals))
+}
+
+/**
+ * Planned loss of every open bot position at its stop: the working broker stop when there is one,
+ * otherwise where the guardian would place it. Feeds the combined open-risk cap.
+ */
+export function openRiskFor(positions: PositionInfo[], openOrders: OrderInfo[]): number {
+  return positions.reduce((sum, position) => {
+    const market = marketBySymbol(position.symbol)
+    if (!market) return sum
+    const stop = stopCoverage(position, openOrders).stopPrice ?? fallbackStopPrice(position, market)
+    return sum + positionRisk(position, stop)
+  }, 0)
+}
+
+/**
  * Decides how to protect one position. If price has already traded through where the stop
  * belongs, a new stop would trigger immediately (or be rejected), so the 1% rule is honoured by
  * closing at market instead, or by waiting for the session to open when the market is closed.
@@ -57,11 +83,11 @@ export function planProtection(
   const missing = position.qty - coverage.coveredQty
   if (missing <= QTY_EPSILON) return { kind: 'covered', stopPrice: coverage.stopPrice }
 
-  const stopPrice = stopPriceFor(position.avgEntry, position.side)
+  const stopPrice = fallbackStopPrice(position, market)
   const breached = position.side === 'long' ? position.currentPrice <= stopPrice : position.currentPrice >= stopPrice
   if (breached) return canTradeNow ? { kind: 'close', stopPrice } : { kind: 'wait_for_open', stopPrice }
 
-  const qty = market.fractional ? Number(missing.toFixed(6)) : Math.ceil(missing - QTY_EPSILON)
+  const qty = market.qtyStep >= 1 ? Math.ceil(missing - QTY_EPSILON) : roundToStep(missing, market.qtyStep)
   return { kind: 'place_stop', qty, stopPrice }
 }
 
@@ -99,12 +125,12 @@ export async function ensureStops(
           }
           case 'close':
             await closePosition(market)
-            return { ...base, action: 'closed_breached', detail: `Unprotected and already through the 1% stop (${plan.stopPrice}); closed at market` }
+            return { ...base, action: 'closed_breached', detail: `Unprotected and already through its stop level (${plan.stopPrice}); closed at market` }
           case 'wait_for_open':
             return {
               ...base,
               action: 'breached_market_closed',
-              detail: `Unprotected and through the 1% stop (${plan.stopPrice}); will close when the session opens`,
+              detail: `Unprotected and through its stop level (${plan.stopPrice}); will close when the session opens`,
             }
         }
       } catch (err) {

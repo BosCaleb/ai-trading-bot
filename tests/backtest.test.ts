@@ -22,7 +22,8 @@ function bars(rows: [o: number, h: number, l: number, c: number][]): Bar[] {
   return rows.map(([o, h, l, c], i) => ({ t: T0 + i * MIN15, o, h, l, c, v: 1000 }))
 }
 
-// GLD: 20% budget, baseline ATR 0.4% -> with atrPct 0.004 the full budget is used.
+// GLD: 3x ATR stop. Scripted signals report atrPct 0.004, so at a 100 close the stop sits 1.2 away
+// and 1% of 100k (1,000) buys floor(1000 / 1.2) = 833 shares.
 const gld = market('gold')
 
 describe('backtest execution model', () => {
@@ -39,23 +40,25 @@ describe('backtest execution model', () => {
     const r = runBacktest({ market: gld, bars: path, initialEquity: 100_000, costs: ZERO_COSTS, canTrade: always, strategy: scripted({ 1: 'enter_long', 3: 'exit' }, path) })
     expect(r.trades).toHaveLength(1)
     const t = r.trades[0]
-    expect(t.qty).toBe(200) // floor(20,000 / 100)
+    expect(t.qty).toBe(833)
+    expect(t.riskAmount).toBeCloseTo(833 * 1.2)
     expect(t.entryPrice).toBe(101)
     expect(t.exitPrice).toBe(105)
     expect(t.exitReason).toBe('signal')
-    expect(t.pnl).toBeCloseTo(800)
-    expect(r.finalEquity).toBeCloseTo(100_800)
+    expect(t.pnl).toBeCloseTo(833 * 4)
+    expect(t.rMultiple).toBeCloseTo((833 * 4) / (833 * 1.2))
+    expect(r.finalEquity).toBeCloseTo(100_000 + 833 * 4)
   })
 
   it('anchors equity stops to the signal close (as the OTO order does) and fills them intrabar', () => {
     const p = bars([
       [100, 100.5, 99.5, 100],
       [100, 100.5, 99.5, 100],
-      [100.2, 100.4, 98.5, 99], // stop 99.00 (1% under the 100 signal close) is hit here
+      [100.2, 100.4, 98.5, 99], // stop 98.80 (3x ATR under the 100 signal close) is hit here
       [99, 99.5, 98, 98.5],
     ])
     const r = runBacktest({ market: gld, bars: p, costs: ZERO_COSTS, canTrade: always, strategy: scripted({ 1: 'enter_long' }, p) })
-    expect(r.trades[0]).toMatchObject({ exitReason: 'stop', stopPrice: 99, exitPrice: 99, barsHeld: 1 })
+    expect(r.trades[0]).toMatchObject({ exitReason: 'stop', stopPrice: 98.8, exitPrice: 98.8, barsHeld: 1 })
   })
 
   it('fills a gap through the stop at the open, not at the stop price', () => {
@@ -63,7 +66,7 @@ describe('backtest execution model', () => {
       [100, 100.5, 99.5, 100],
       [100, 100.5, 99.5, 100],
       [100.2, 100.4, 99.6, 100],
-      [97, 97.5, 96, 96.5], // gaps straight through 99
+      [97, 97.5, 96, 96.5], // gaps straight through 98.80
     ])
     const r = runBacktest({ market: gld, bars: p, costs: ZERO_COSTS, canTrade: always, strategy: scripted({ 1: 'enter_long' }, p) })
     expect(r.trades[0]).toMatchObject({ exitReason: 'stop', exitPrice: 97 })
@@ -79,9 +82,9 @@ describe('backtest execution model', () => {
       [97, 97.5, 96.5, 97],
     ])
     const r = runBacktest({ market: gld, bars: p, costs: ZERO_COSTS, canTrade: always, strategy: scripted({ 1: 'enter_short', 3: 'exit' }, p) })
-    expect(r.trades[0]).toMatchObject({ side: 'short', entryPrice: 100, exitPrice: 97, stopPrice: 101 })
-    expect(r.trades[0].pnl).toBeCloseTo(200 * 3)
-    expect(r.finalEquity).toBeCloseTo(100_600)
+    expect(r.trades[0]).toMatchObject({ side: 'short', qty: 833, entryPrice: 100, exitPrice: 97, stopPrice: 101.2 })
+    expect(r.trades[0].pnl).toBeCloseTo(833 * 3)
+    expect(r.finalEquity).toBeCloseTo(100_000 + 833 * 3)
 
     const stopped = bars([
       [100, 100.5, 99.5, 100],
@@ -90,18 +93,18 @@ describe('backtest execution model', () => {
       [101, 101.5, 100.5, 101],
     ])
     const s = runBacktest({ market: gld, bars: stopped, costs: ZERO_COSTS, canTrade: always, strategy: scripted({ 1: 'enter_short' }, stopped) })
-    expect(s.trades[0]).toMatchObject({ exitReason: 'stop', exitPrice: 101 })
+    expect(s.trades[0]).toMatchObject({ exitReason: 'stop', exitPrice: 101.2 })
   })
 
   it('anchors crypto stops to the actual fill (stop is placed after the fill)', () => {
     const p = bars([
       [100, 100.5, 99.5, 100],
       [100, 100.5, 99.5, 100],
-      [102, 102.5, 101.5, 102], // fills at 102, stop at 100.98
+      [102, 102.5, 101.5, 102], // fills at 102; 2x ATR = 0.8 from the signal, so the stop sits at 101.20
       [102, 102.5, 100.9, 101],
     ])
     const r = runBacktest({ market: market('btc'), bars: p, costs: ZERO_COSTS, strategy: scripted({ 1: 'enter_long' }, p) })
-    expect(r.trades[0]).toMatchObject({ stopPrice: 100.98, exitReason: 'stop', exitPrice: 100.98 })
+    expect(r.trades[0]).toMatchObject({ qty: 1250, stopPrice: 101.2, exitReason: 'stop', exitPrice: 101.2 })
   })
 
   it('charges fees and slippage on both sides', () => {
@@ -110,8 +113,8 @@ describe('backtest execution model', () => {
     const t = r.trades[0]
     expect(t.entryPrice).toBeCloseTo(101 * 1.0005)
     expect(t.exitPrice).toBeCloseTo(105 * 0.9995)
-    const fees = 200 * t.entryPrice * 0.001 + 200 * t.exitPrice * 0.001
-    expect(t.pnl).toBeCloseTo(200 * (t.exitPrice - t.entryPrice) - fees)
+    const fees = t.qty * t.entryPrice * 0.001 + t.qty * t.exitPrice * 0.001
+    expect(t.pnl).toBeCloseTo(t.qty * (t.exitPrice - t.entryPrice) - fees)
     expect(r.finalEquity).toBeCloseTo(100_000 + t.pnl)
   })
 
@@ -156,13 +159,14 @@ describe('backtest with the real strategies', () => {
       expect(r.finalEquity - r.initialEquity).toBeCloseTo(pnl, 4)
       // One position at a time: trades never overlap.
       for (let k = 1; k < r.trades.length; k++) expect(r.trades[k].entryTime).toBeGreaterThanOrEqual(r.trades[k - 1].exitTime)
-      // Stop discipline: a non-gap stop exit never loses more than the stop distance plus costs.
+      // Stop discipline: a non-gap stop exit loses about 1R (1% of equity), never much more.
       for (const t of r.trades.filter((t) => t.exitReason === 'stop')) {
         const gapped = t.side === 'long' ? t.exitPrice < t.stopPrice * 0.999 : t.exitPrice > t.stopPrice * 1.001
         if (gapped) continue
-        const stopDistance = Math.abs(t.entryPrice - t.stopPrice) / t.entryPrice
-        expect(t.returnPct).toBeGreaterThan(-(stopDistance + 0.01))
+        expect(t.rMultiple).toBeGreaterThan(-1.6) // anchor offset + fees/slippage
       }
+      // Every trade risked at most 1% of the equity it was sized on.
+      for (const t of r.trades) expect(t.riskAmount).toBeLessThanOrEqual(r.initialEquity * 1.5 * 0.01 + 1e-6)
       if (!m.allowShort) expect(r.trades.every((t) => t.side === 'long')).toBe(true)
     })
   }
@@ -182,7 +186,7 @@ describe('metrics', () => {
       [101.5, 104, 101, 103.5],
       [105, 106, 104.5, 105.5],
       [105.5, 106, 105, 105.5],
-      [105.5, 105.6, 103, 103.5], // stopped: stop at 104.45 from the 105.5 signal close
+      [105.5, 105.6, 103, 103.5], // stopped: 3x ATR (1.266) under the 105.5 signal close
       [103.5, 104, 103, 103.5],
     ])
     const r = runBacktest({ market: gld, bars: p, costs: ZERO_COSTS, canTrade: always, strategy: scripted({ 1: 'enter_long', 3: 'exit', 5: 'enter_long' }, p) })

@@ -14,12 +14,18 @@ export function RiskPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
     },
     vol: {
       text: snapshot.configured
-        ? `Scalars: ${snapshot.markets
+        ? `Next trade risk: ${snapshot.markets
             .filter((m) => m.nextSize)
-            .map((m) => `${m.config.displaySymbol} ${Math.round((m.nextSize?.volScalar ?? 0) * 100)}%`)
+            .map((m) => `${m.config.displaySymbol} ${m.nextSize?.skipReason ? 'skip' : fmtPct(m.nextSize?.riskPct ?? 0, 2, false)}`)
             .join(' · ') || 'waiting for data'}`
         : 'Waiting for broker',
-      tone: 'idle',
+      tone: snapshot.markets.some((m) => m.nextSize?.skipReason) ? 'active' : 'idle',
+    },
+    openrisk: {
+      text: snapshot.account
+        ? `${fmtPct(risk.openRiskPct, 2, false)} of ${fmtPct(risk.maxOpenRiskPct, 0, false)} cap in use`
+        : 'Waiting for broker',
+      tone: risk.openRiskPct > risk.maxOpenRiskPct * 0.8 ? 'active' : 'idle',
     },
     corr: risk.correlation.active
       ? {
@@ -28,8 +34,8 @@ export function RiskPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         }
       : { text: 'Neither index is in a position. Both eligible.', tone: 'idle' },
     gross: {
-      text: snapshot.account ? `${fmtPct(risk.grossExposurePct, 0, false)} of 100% cap in use` : 'Waiting for broker',
-      tone: risk.grossExposurePct > 0.8 ? 'active' : 'idle',
+      text: snapshot.account ? `${risk.grossExposurePct.toFixed(2)}x of ${risk.maxLeverage}x cap in use` : 'Waiting for broker',
+      tone: risk.grossExposurePct > risk.maxLeverage * 0.8 ? 'active' : 'idle',
     },
     one: { text: `${openCount} of 5 markets in a position`, tone: 'idle' },
   }

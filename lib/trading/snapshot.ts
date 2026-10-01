@@ -16,7 +16,7 @@ import {
 import { isSmsConfigured } from '@/lib/notify/sms'
 import { botEnabled, evaluateMarket, positionFor } from './engine'
 import { MARKETS, TIMEFRAME_META } from './markets'
-import { stopCoverage } from './protection'
+import { openRiskFor, stopCoverage } from './protection'
 import { RISK, RISK_RULES, correlationFilterState, positionSize } from './risk'
 import type { MarketConfig, OrderInfo, PositionInfo, Signal } from './types'
 
@@ -31,7 +31,8 @@ export interface MarketSnapshot {
   stopPrice: number | null
   /** False when a position is open without full stop coverage at the broker */
   stopCovered: boolean
-  nextSize: { qty: number; notional: number; volScalar: number } | null
+  /** What the next entry would look like under the risk rules (qty 0 with skipReason when it would be skipped) */
+  nextSize: { qty: number; notional: number; riskAmount: number; riskPct: number; stopDistance: number; skipReason: string | null } | null
   lastBarAt: string | null
   error: string | null
 }
@@ -49,8 +50,14 @@ export interface DashboardSnapshot {
   history: EquityPoint[]
   risk: {
     rules: typeof RISK_RULES
-    stopLossPct: number
+    riskPerTradePct: number
+    maxOpenRiskPct: number
+    maxLeverage: number
+    /** Planned loss of all open positions at their stops */
+    openRisk: number
+    openRiskPct: number
     grossExposure: number
+    /** Gross exposure / equity, i.e. current leverage */
     grossExposurePct: number
     correlation: { active: boolean; side?: 'long' | 'short'; heldMarket?: string; blockedMarket?: string }
   }
@@ -87,7 +94,11 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
     history: [],
     risk: {
       rules: RISK_RULES,
-      stopLossPct: RISK.stopLossPct,
+      riskPerTradePct: RISK.riskPerTradePct,
+      maxOpenRiskPct: RISK.maxOpenRiskPct,
+      maxLeverage: RISK.maxLeverage,
+      openRisk: 0,
+      openRiskPct: 0,
       grossExposure: 0,
       grossExposurePct: 0,
       correlation: { active: false },
@@ -131,7 +142,16 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
             position,
             stopPrice: coverage?.stopPrice ?? null,
             stopCovered: !position || !coverage || coverage.coveredQty >= position.qty - 1e-6,
-            nextSize: nextSize ? { qty: nextSize.qty, notional: nextSize.notional, volScalar: nextSize.volScalar } : null,
+            nextSize: nextSize
+              ? {
+                  qty: nextSize.qty,
+                  notional: nextSize.notional,
+                  riskAmount: nextSize.riskAmount,
+                  riskPct: nextSize.riskPct,
+                  stopDistance: nextSize.stopDistance,
+                  skipReason: nextSize.skipReason,
+                }
+              : null,
             lastBarAt: lastBar ? new Date(lastBar.t).toISOString() : null,
             error: null,
           }
@@ -142,6 +162,7 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
     )
 
     const gross = positions.reduce((sum, p) => sum + Math.abs(p.marketValue), 0)
+    const openRisk = openRiskFor(positions, openOrders)
     const corr = correlationFilterState(positions)
 
     return {
@@ -153,6 +174,8 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
       markets,
       risk: {
         ...base.risk,
+        openRisk,
+        openRiskPct: account.equity > 0 ? openRisk / account.equity : 0,
         grossExposure: gross,
         grossExposurePct: account.equity > 0 ? gross / account.equity : 0,
         correlation: { active: corr.active, side: corr.side, heldMarket: corr.heldMarket?.name, blockedMarket: corr.blockedMarket?.name },

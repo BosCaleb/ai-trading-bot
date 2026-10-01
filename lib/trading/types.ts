@@ -25,12 +25,15 @@ export interface MarketConfig {
   timeframe: Timeframe
   strategy: StrategyId
   allowShort: boolean
-  fractional: boolean
-  /** Max notional exposure for this market as a fraction of account equity, before volatility scaling */
-  exposurePct: number
-  /** "Normal" ATR as a fraction of price on this timeframe. Higher current ATR shrinks position size. */
+  /** Smallest quantity increment the broker accepts (1 = whole units) */
+  qtyStep: number
+  /** Smallest order the broker accepts; trades that cannot meet it within the risk budget are skipped */
+  minQty: number
+  /** Initial stop distance in multiples of the 14-bar ATR */
+  stopAtrMultiple: number
+  /** Typical ATR as a fraction of price on this timeframe; fallback when no live ATR is available */
   baselineAtrPct: number
-  /** Markets in the same group may not be long at the same time */
+  /** Markets in the same group may not hold positions in the same direction */
   correlationGroup?: string
   description: string
 }

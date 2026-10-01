@@ -5,7 +5,6 @@ import { cn } from '@/lib/utils'
 export function AccountStrip({ snapshot }: { snapshot: DashboardSnapshot }) {
   const a = snapshot.account
   const openPositions = snapshot.markets.filter((m) => m.position).length
-  const openRisk = snapshot.markets.reduce((sum, m) => sum + (m.position ? Math.abs(m.position.marketValue) * snapshot.risk.stopLossPct : 0), 0)
 
   return (
     <section aria-label="Account summary" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
@@ -17,11 +16,11 @@ export function AccountStrip({ snapshot }: { snapshot: DashboardSnapshot }) {
         tone={plClass(a?.dayPl)}
       />
       <Stat
-        label="Gross exposure"
-        value={fmtPct(a ? snapshot.risk.grossExposurePct : null, 0, false)}
-        sub={a ? `${fmtMoney(snapshot.risk.grossExposure, { compact: true })} of ${fmtMoney(a.equity, { compact: true })}` : undefined}
+        label="Leverage"
+        value={a ? `${snapshot.risk.grossExposurePct.toFixed(2)}x` : '—'}
+        sub={a ? `${fmtMoney(snapshot.risk.grossExposure, { compact: true })} exposure, cap ${snapshot.risk.maxLeverage}x` : undefined}
       />
-      <Stat label="Open positions" value={a ? `${openPositions} / 5` : '—'} sub={a ? `${fmtMoney(openRisk, { compact: true })} at risk to stops` : undefined} />
+      <Stat label="Open positions" value={a ? `${openPositions} / 5` : '—'} sub={a ? `${fmtMoney(snapshot.risk.openRisk, { compact: true })} (${fmtPct(snapshot.risk.openRiskPct, 1, false)}) at risk to stops` : undefined} />
       <Stat label="Cash" value={fmtMoney(a?.cash)} sub={a ? `${fmtMoney(a.buyingPower, { compact: true })} buying power` : undefined} />
     </section>
   )

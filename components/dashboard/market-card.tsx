@@ -76,8 +76,12 @@ export function MarketCard({ market, configured }: { market: MarketSnapshot; con
         </dl>
       ) : (
         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-md bg-background/60 p-3 font-mono text-xs tabular">
-          <Row label="Next size" value={nextSize ? `${fmtQty(nextSize.qty)} (${fmtMoney(nextSize.notional, { compact: true })})` : '—'} />
-          <Row label="Vol scalar" value={nextSize ? `${Math.round(nextSize.volScalar * 100)}%` : '—'} />
+          <Row
+            label="Next size"
+            value={nextSize ? (nextSize.skipReason ? 'Skip: too small' : `${fmtQty(nextSize.qty)} (${fmtMoney(nextSize.notional, { compact: true })})`) : '—'}
+            tone={nextSize?.skipReason ? 'text-negative' : undefined}
+          />
+          <Row label="Risk / stop" value={nextSize && !nextSize.skipReason ? `${fmtMoney(nextSize.riskAmount)} · ${config.stopAtrMultiple}x ATR` : '—'} />
           <Row label="ATR / bar" value={fmtPct(atrPct, 2, false)} />
           <Row label="Shorts" value={config.allowShort ? 'Allowed' : 'Off'} />
         </dl>

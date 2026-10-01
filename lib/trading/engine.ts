@@ -10,7 +10,7 @@ import {
   tradingMode,
 } from '@/lib/broker/alpaca'
 import { marketsForTimeframe } from './markets'
-import { type ProtectionResult, ensureStops } from './protection'
+import { type ProtectionResult, ensureStops, openRiskFor } from './protection'
 import { type PendingEntry, applyFilters, positionSize, stopPriceFor } from './risk'
 import { STRATEGIES } from './strategies'
 import type { MarketConfig, PositionInfo, PositionSide, Signal, Timeframe } from './types'
@@ -91,6 +91,8 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
 
   const pendingEntries: PendingEntry[] = []
   const livePositions = [...positions]
+  // Planned loss at the stops of everything open; grows as this cycle adds entries.
+  let openRisk = openRiskFor(positions, openOrders)
   const results: MarketCycleResult[] = []
 
   for (const ev of ordered) {
@@ -136,6 +138,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
         const order = await closePosition(market)
         const idx = livePositions.findIndex((p) => p.symbol === position.symbol)
         if (idx >= 0) livePositions.splice(idx, 1)
+        openRisk = openRiskFor(livePositions, openOrders)
         results.push({
           ...base,
           action: 'closed',
@@ -156,18 +159,28 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
         pendingEntries,
         equity: account.equity,
         proposedNotional: sizing.notional,
+        proposedRisk: sizing.riskAmount,
+        openRisk,
       })
       if (!filter.ok) {
         results.push({ ...base, action: 'blocked', detail: `${filter.reason}. Signal: ${signal.reason}` })
         continue
       }
-      if (sizing.qty <= 0 || !price) {
-        results.push({ ...base, action: 'blocked', detail: 'Volatility-scaled size rounded to zero' })
+      if (sizing.skipReason || !price) {
+        results.push({ ...base, action: 'blocked', detail: `${sizing.skipReason ?? 'No price'}. Signal: ${signal.reason}` })
         continue
       }
 
-      const stop = stopPriceFor(price, side)
-      const placed = await submitEntry({ market, side, qty: sizing.qty, referencePrice: price, stopPrice: stop })
+      const stop = stopPriceFor(price, side, sizing.stopDistance)
+      const placed = await submitEntry({
+        market,
+        side,
+        qty: sizing.qty,
+        referencePrice: price,
+        stopPrice: stop,
+        stopDistance: sizing.stopDistance,
+      })
+      openRisk += sizing.riskAmount
 
       pendingEntries.push({ marketId: market.id, side })
       livePositions.push({
@@ -185,7 +198,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
         ...base,
         position: side,
         action: side === 'long' ? 'opened_long' : 'opened_short',
-        detail: `${signal.reason}. Size ${sizing.qty} (${Math.round(sizing.volScalar * 100)}% of budget, ATR ${(atrPct * 100).toFixed(2)}%). Stop ${placed.stopPrice}.`,
+        detail: `${signal.reason}. Size ${sizing.qty}, risking ${sizing.riskAmount.toFixed(2)} (${(sizing.riskPct * 100).toFixed(2)}% of equity) to a stop ${market.stopAtrMultiple}x ATR away at ${placed.stopPrice}.`,
         order: { id: placed.orderId, qty: sizing.qty, stopPrice: placed.stopPrice, fillPrice: placed.fillPrice },
       })
     } catch (err) {

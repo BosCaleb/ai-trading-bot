@@ -112,6 +112,7 @@ async function main() {
     const result = runBacktest({ market, bars: inRange, initialEquity, costs })
     results.push(result)
     if (result.skippedClosedSession) console.log(`  ${result.skippedClosedSession} signals fell outside the regular session and were not traded (as live)`)
+    if (result.skippedTooSmall) console.log(`  ${result.skippedTooSmall} entries skipped: broker minimum size would risk more than 1% of equity`)
   }
 
   console.log()
@@ -119,7 +120,7 @@ async function main() {
   if (values.trades) results.forEach(printTrades)
 
   console.log(
-    '\nEach market is run on its own with full starting equity. Not modelled: correlation filter, gross cap, short borrow fees, crypto stop-limit misses.',
+    '\nEach market is run on its own with full starting equity. Not modelled: correlation filter, combined risk and leverage caps across markets, short borrow fees, crypto stop-limit misses.',
   )
 
   if (values.out) {

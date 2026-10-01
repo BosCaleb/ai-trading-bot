@@ -1,5 +1,10 @@
 import type { MarketConfig, MarketId, StrategyId, Timeframe } from './types'
 
+/**
+ * Quantity rules mirror the current broker (Alpaca: whole ETF shares; BTC/USD fractional) and will
+ * change with the Exness adapter. Stop multiples are research-based starting points (wider for
+ * trend following, which must survive pullbacks) and get re-tested in the backtester.
+ */
 export const MARKETS: MarketConfig[] = [
   {
     id: 'spx',
@@ -10,8 +15,9 @@ export const MARKETS: MarketConfig[] = [
     timeframe: '15Min',
     strategy: 'mean_reversion',
     allowShort: true,
-    fractional: false,
-    exposurePct: 0.2,
+    qtyStep: 1,
+    minQty: 1,
+    stopAtrMultiple: 2.5,
     baselineAtrPct: 0.0015,
     correlationGroup: 'us_index',
     description: 'Fades 2-sigma stretches from the 20-bar mean and exits when price snaps back.',
@@ -25,8 +31,9 @@ export const MARKETS: MarketConfig[] = [
     timeframe: '15Min',
     strategy: 'mean_reversion',
     allowShort: true,
-    fractional: false,
-    exposurePct: 0.2,
+    qtyStep: 1,
+    minQty: 1,
+    stopAtrMultiple: 2.5,
     baselineAtrPct: 0.002,
     correlationGroup: 'us_index',
     description: 'Fades 2-sigma stretches from the 20-bar mean and exits when price snaps back.',
@@ -40,8 +47,9 @@ export const MARKETS: MarketConfig[] = [
     timeframe: '1Hour',
     strategy: 'momentum_breakout',
     allowShort: false,
-    fractional: true,
-    exposurePct: 0.15,
+    qtyStep: 0.000001,
+    minQty: 0.0001,
+    stopAtrMultiple: 2,
     baselineAtrPct: 0.006,
     description: 'Buys closes through the 20-bar high on 1.5x volume with a strong candle body; exits below the 20 EMA.',
   },
@@ -54,8 +62,9 @@ export const MARKETS: MarketConfig[] = [
     timeframe: '4Hour',
     strategy: 'trend_following',
     allowShort: true,
-    fractional: false,
-    exposurePct: 0.2,
+    qtyStep: 1,
+    minQty: 1,
+    stopAtrMultiple: 3,
     baselineAtrPct: 0.004,
     description: 'Rides 20/50 EMA trends with pullback entries; exits when the trend structure breaks.',
   },
@@ -68,8 +77,9 @@ export const MARKETS: MarketConfig[] = [
     timeframe: '4Hour',
     strategy: 'trend_following',
     allowShort: true,
-    fractional: false,
-    exposurePct: 0.2,
+    qtyStep: 1,
+    minQty: 1,
+    stopAtrMultiple: 3,
     baselineAtrPct: 0.008,
     description: 'Rides 20/50 EMA trends with pullback entries; exits when the trend structure breaks.',
   },

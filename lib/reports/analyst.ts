@@ -43,7 +43,7 @@ export function describeSnapshot(snapshot: DashboardSnapshot): string {
   if (snapshot.account) {
     const a = snapshot.account
     lines.push(
-      `Account: equity ${money(a.equity)}, cash ${money(a.cash)}, day P&L ${money(a.dayPl)} (${pct(a.dayPlPct)}), gross exposure ${pct(snapshot.risk.grossExposurePct, 0)} of equity.`,
+      `Account: equity ${money(a.equity)}, cash ${money(a.cash)}, day P&L ${money(a.dayPl)} (${pct(a.dayPlPct)}), leverage ${snapshot.risk.grossExposurePct.toFixed(2)}x (cap ${snapshot.risk.maxLeverage}x), open risk at stops ${money(snapshot.risk.openRisk)} (${pct(snapshot.risk.openRiskPct)}, cap ${pct(snapshot.risk.maxOpenRiskPct, 0)}).`,
     )
   }
   if (snapshot.clock) {
@@ -94,7 +94,7 @@ const INSTRUCTIONS = `You are the analyst for an automated five-market trading d
 - Mean reversion on 15-minute candles for the S&P 500 (SPY) and NASDAQ 100 (QQQ)
 - Momentum breakouts on 1-hour candles for Bitcoin
 - Trend following on 4-hour candles for Gold (GLD) and Crude Oil (USO)
-Every trade carries a hard 1% stop, sizing scales down with volatility, and SPY/QQQ can never hold positions in the same direction.
+Every trade carries a broker-side stop a multiple of ATR away and is sized so hitting it loses about 1% of equity, open risk across all positions is capped at 3%, and SPY/QQQ can never hold positions in the same direction.
 
 You write SMS messages for the desk owner. Rules:
 - Plain text only. No markdown, no headers, no bullet symbols, no emojis.
