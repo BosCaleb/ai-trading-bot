@@ -34,7 +34,7 @@ function headers(): Record<string, string> {
   }
 }
 
-async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers(), ...(init?.headers ?? {}) }, cache: 'no-store' })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
@@ -193,7 +193,7 @@ export async function getPortfolioHistory(period = '1M', timeframe = '1D'): Prom
     .filter((p): p is EquityPoint => typeof p.equity === 'number' && p.equity > 0)
 }
 
-interface AlpacaBar {
+export interface AlpacaBar {
   t: string
   o: number
   h: number
@@ -202,7 +202,7 @@ interface AlpacaBar {
   v: number
 }
 
-interface StockBarsResponse {
+export interface StockBarsResponse {
   bars: Record<string, AlpacaBar[] | undefined>
   next_page_token: string | null
 }
@@ -222,7 +222,7 @@ function minutesIntoEasternDay(ms: number): number {
 }
 
 /** Regular US session is 09:30-16:00 ET. Intraday index bars outside it are thin and distort the mean. */
-function isRegularSession(ms: number): boolean {
+export function isRegularSession(ms: number): boolean {
   const m = minutesIntoEasternDay(ms)
   return m >= 9 * 60 + 30 && m < 16 * 60
 }
