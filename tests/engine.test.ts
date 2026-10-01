@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runCycle } from '@/lib/trading/engine'
+import { type NewTrade, MemoryStore } from '@/lib/state/store'
 import { openRiskFor } from '@/lib/trading/protection'
 import type { OrderInfo } from '@/lib/trading/types'
 import { position } from './helpers'
@@ -109,5 +110,76 @@ describe('openRiskFor', () => {
     // No stop: GLD baseline ATR 0.4% x 3 = 1.2% of 200 = 2.40 per share.
     expect(openRiskFor([gld], [])).toBeCloseTo(24)
     expect(openRiskFor([position({ symbol: 'TSLA' })], [])).toBe(0)
+  })
+})
+
+describe('runCycle trade journal', () => {
+  beforeEach(() => {
+    vi.stubEnv('ALPACA_API_KEY', 'test')
+    vi.stubEnv('ALPACA_API_SECRET', 'test')
+    vi.stubEnv('BOT_ENABLED', 'true')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  const journaled = (o: Partial<NewTrade>): NewTrade => ({
+    mode: 'paper', marketId: 'spx', symbol: 'SPY', side: 'long', qty: 100, entryOrderId: 'old', entryPrice: 500,
+    stopPrice: 490, stopDistance: 10, riskAmount: 1000, equityAtEntry: 100_000, entryReason: 'earlier', ...o,
+  })
+
+  it('records each entry with its stop, risk and the equity it was sized on, plus an equity snapshot', async () => {
+    mockAlpaca()
+    const store = new MemoryStore()
+    const result = await runCycle('4Hour', { store })
+
+    expect(result.journal).toEqual({ enabled: true, errors: [] })
+    const trades = await store.openTrades('paper')
+    expect(trades.map((t) => t.marketId).sort()).toEqual(['gold', 'oil'])
+    for (const t of trades) {
+      expect(t.equityAtEntry).toBe(100_000)
+      expect(t.riskAmount).toBeGreaterThan(900)
+      expect(t.riskAmount).toBeLessThanOrEqual(1000)
+      expect(t.stopPrice).toBeCloseTo(150 - t.stopDistance, 2)
+      expect(t.entryOrderId).toMatch(/^o\d$/)
+    }
+    expect(store.equity).toEqual([expect.objectContaining({ mode: 'paper', equity: 100_000, source: 'cycle:4Hour' })])
+  })
+
+  it('restores a missing stop at the journaled original stop, not the generic fallback', async () => {
+    const calls = mockAlpaca({
+      positions: [{ symbol: 'SPY', qty: '100', side: 'long', avg_entry_price: '500', current_price: '505', market_value: '50500', unrealized_pl: '500', unrealized_plpc: '0.01' }],
+    })
+    const store = new MemoryStore()
+    await store.openTrade(journaled({}))
+    const result = await runCycle('4Hour', { store })
+
+    expect(result.protection[0]).toMatchObject({ symbol: 'SPY', action: 'stop_placed' })
+    const stop = calls.find((c) => c.method === 'POST' && c.body?.symbol === 'SPY')?.body
+    expect(stop).toMatchObject({ type: 'stop', side: 'sell', qty: '100', stop_price: '490.00', time_in_force: 'gtc' })
+  })
+
+  it('closes journal entries whose position disappeared (stopped out at the broker)', async () => {
+    mockAlpaca() // broker shows no positions
+    const store = new MemoryStore()
+    await store.openTrade(journaled({ marketId: 'spx', symbol: 'SPY' }))
+    await runCycle('4Hour', { store })
+
+    const spx = store.trades.find((t) => t.marketId === 'spx')
+    expect(spx).toMatchObject({ exitReason: 'closed_at_broker', exitPrice: null })
+    expect(spx?.closedAt).not.toBeNull()
+  })
+
+  it('keeps trading when the journal is down, and reports the failure', async () => {
+    mockAlpaca()
+    const store = new MemoryStore()
+    store.openTrade = async () => {
+      throw new Error('database unavailable')
+    }
+    const result = await runCycle('4Hour', { store })
+
+    expect(result.results.filter((r) => r.action === 'opened_long')).toHaveLength(2)
+    expect(result.journal.errors).toEqual([expect.stringMatching(/open (gold|oil): database unavailable/), expect.stringMatching(/database unavailable/)])
   })
 })

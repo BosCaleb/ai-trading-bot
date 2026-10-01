@@ -15,6 +15,13 @@ function normalize(symbol: string): string {
   return symbol.replace('/', '')
 }
 
+/** Original stop per symbol from the trade journal, keyed by symbol without '/'. */
+export type KnownStops = Map<string, number>
+
+export function knownStopsFrom(trades: { symbol: string; stopPrice: number }[]): KnownStops {
+  return new Map(trades.map((t) => [normalize(t.symbol), t.stopPrice]))
+}
+
 export interface StopCoverage {
   /** Tightest working stop price, or null when nothing protects the position */
   stopPrice: number | null
@@ -55,15 +62,20 @@ function roundToStep(qty: number, step: number): number {
   return Number((Math.round(qty / step) * step).toFixed(decimals))
 }
 
+/** Where the stop for a position belongs: its journaled original stop, else the typical-ATR fallback. */
+export function intendedStopPrice(position: PositionInfo, market: MarketConfig, knownStops?: KnownStops): number {
+  return knownStops?.get(normalize(position.symbol)) ?? fallbackStopPrice(position, market)
+}
+
 /**
  * Planned loss of every open bot position at its stop: the working broker stop when there is one,
  * otherwise where the guardian would place it. Feeds the combined open-risk cap.
  */
-export function openRiskFor(positions: PositionInfo[], openOrders: OrderInfo[]): number {
+export function openRiskFor(positions: PositionInfo[], openOrders: OrderInfo[], knownStops?: KnownStops): number {
   return positions.reduce((sum, position) => {
     const market = marketBySymbol(position.symbol)
     if (!market) return sum
-    const stop = stopCoverage(position, openOrders).stopPrice ?? fallbackStopPrice(position, market)
+    const stop = stopCoverage(position, openOrders).stopPrice ?? intendedStopPrice(position, market, knownStops)
     return sum + positionRisk(position, stop)
   }, 0)
 }
@@ -78,12 +90,13 @@ export function planProtection(
   market: MarketConfig,
   openOrders: OrderInfo[],
   canTradeNow: boolean,
+  knownStops?: KnownStops,
 ): ProtectionPlan {
   const coverage = stopCoverage(position, openOrders)
   const missing = position.qty - coverage.coveredQty
   if (missing <= QTY_EPSILON) return { kind: 'covered', stopPrice: coverage.stopPrice }
 
-  const stopPrice = fallbackStopPrice(position, market)
+  const stopPrice = coverage.stopPrice ?? intendedStopPrice(position, market, knownStops)
   const breached = position.side === 'long' ? position.currentPrice <= stopPrice : position.currentPrice >= stopPrice
   if (breached) return canTradeNow ? { kind: 'close', stopPrice } : { kind: 'wait_for_open', stopPrice }
 
@@ -104,6 +117,7 @@ export async function ensureStops(
   positions: PositionInfo[],
   openOrders: OrderInfo[],
   equityMarketOpen: boolean,
+  knownStops?: KnownStops,
 ): Promise<ProtectionResult[]> {
   return Promise.all(
     positions.map(async (position): Promise<ProtectionResult> => {
@@ -115,7 +129,7 @@ export async function ensureStops(
       const canTradeNow = market.assetClass === 'crypto' || equityMarketOpen
 
       try {
-        const plan = planProtection(position, market, openOrders, canTradeNow)
+        const plan = planProtection(position, market, openOrders, canTradeNow, knownStops)
         switch (plan.kind) {
           case 'covered':
             return { ...base, action: 'covered', detail: `Stop working at ${plan.stopPrice ?? '?'}` }

@@ -25,7 +25,7 @@ export function Dashboard({ initial }: { initial: DashboardSnapshot }) {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <DeskHeader snapshot={snapshot} refreshing={isValidating} onRefresh={() => mutate()} />
 
-      {!snapshot.configured ? <SetupNotice smsConfigured={snapshot.smsConfigured} /> : null}
+      {!snapshot.configured ? <SetupNotice smsConfigured={snapshot.smsConfigured} stateConfigured={snapshot.stateConfigured} /> : null}
       {snapshot.configured && snapshot.error ? (
         <div role="alert" className="rounded-lg border border-negative/40 bg-negative/10 px-4 py-3 text-sm text-foreground">
           <span className="font-medium">Broker error:</span> {snapshot.error}

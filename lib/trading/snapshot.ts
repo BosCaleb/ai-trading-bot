@@ -14,6 +14,7 @@ import {
   tradingMode,
 } from '@/lib/broker/alpaca'
 import { isSmsConfigured } from '@/lib/notify/sms'
+import { isStateStoreConfigured } from '@/lib/state/supabase-store'
 import { botEnabled, evaluateMarket, positionFor } from './engine'
 import { MARKETS, TIMEFRAME_META } from './markets'
 import { openRiskFor, stopCoverage } from './protection'
@@ -42,6 +43,8 @@ export interface DashboardSnapshot {
   mode: 'paper' | 'live'
   botEnabled: boolean
   smsConfigured: boolean
+  /** Supabase connected: trade journal, equity history and loss-limit state persist */
+  stateConfigured: boolean
   generatedAt: string
   account: AccountInfo | null
   clock: ClockInfo | null
@@ -86,6 +89,7 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
     mode: tradingMode(),
     botEnabled: botEnabled(),
     smsConfigured: isSmsConfigured(),
+    stateConfigured: isStateStoreConfigured(),
     generatedAt: new Date().toISOString(),
     account: null,
     clock: null,

@@ -9,8 +9,10 @@ import {
   submitEntry,
   tradingMode,
 } from '@/lib/broker/alpaca'
+import type { StateStore, TradeRecord } from '@/lib/state/store'
+import { getStateStore } from '@/lib/state/supabase-store'
 import { marketsForTimeframe } from './markets'
-import { type ProtectionResult, ensureStops, openRiskFor } from './protection'
+import { type ProtectionResult, ensureStops, knownStopsFrom, openRiskFor } from './protection'
 import { type PendingEntry, applyFilters, positionSize, stopPriceFor } from './risk'
 import { STRATEGIES } from './strategies'
 import type { MarketConfig, PositionInfo, PositionSide, Signal, Timeframe } from './types'
@@ -38,6 +40,13 @@ export interface CycleResult {
   /** Stop-guardian pass over every open position, run before any new signals */
   protection: ProtectionResult[]
   results: MarketCycleResult[]
+  /** Whether trades and equity were persisted, and anything that failed doing so */
+  journal: { enabled: boolean; errors: string[] }
+}
+
+export interface CycleDeps {
+  /** Defaults to Supabase when configured; null runs without persistence */
+  store?: StateStore | null
 }
 
 export function botEnabled(): boolean {
@@ -58,16 +67,49 @@ export function evaluateMarket(market: MarketConfig, bars: ReturnType<typeof clo
  * One scheduled pass for every market on a timeframe: pull closed candles, ask the market's
  * strategy for a signal, run it through the risk filters, then act at the broker.
  */
-export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
+export async function runCycle(timeframe: Timeframe, deps: CycleDeps = {}): Promise<CycleResult> {
+  const store = deps.store === undefined ? getStateStore() : deps.store
+  const mode = tradingMode()
   const markets = marketsForTimeframe(timeframe)
   const [account, allPositions, clock, openOrders] = await Promise.all([getAccount(), getPositions(), getClock(), getOpenOrders()])
   const enabled = botEnabled()
+  const journalErrors: string[] = []
+  /** Journal writes never block trading: a failure is reported, not thrown. */
+  const journal = async (what: string, fn: (s: StateStore) => Promise<unknown>) => {
+    if (!store) return
+    try {
+      await fn(store)
+    } catch (err) {
+      journalErrors.push(`${what}: ${(err as Error).message}`)
+    }
+  }
+
+  let openTrades: TradeRecord[] = []
+  await journal('load open trades', async (s) => {
+    openTrades = await s.openTrades(mode)
+  })
+  const knownStops = knownStopsFrom(openTrades)
 
   // Protect what is already open before acting on anything new. Positions the guardian had to
   // close are dropped so strategies don't also try to exit them.
-  const protection = await ensureStops(allPositions, openOrders, clock.isOpen)
+  const protection = await ensureStops(allPositions, openOrders, clock.isOpen, knownStops)
   const closedByGuardian = new Set(protection.filter((p) => p.action === 'closed_breached').map((p) => p.symbol))
   const positions = allPositions.filter((p) => !closedByGuardian.has(p.symbol))
+
+  // Journal trades whose position is gone: the broker stop fired, or the guardian just closed it.
+  for (const trade of openTrades) {
+    const stillOpen = positions.some((p) => p.symbol.replace('/', '') === trade.symbol.replace('/', ''))
+    if (stillOpen) continue
+    const guardian = closedByGuardian.has(trade.symbol.replace('/', ''))
+    await journal(`close ${trade.marketId}`, (s) =>
+      s.closeTrade(mode, trade.marketId, {
+        exitPrice: null,
+        exitReason: guardian ? 'guardian_closed_breached' : 'closed_at_broker',
+        pnl: null,
+      }),
+    )
+  }
+  await journal('record equity', (s) => s.recordEquity(mode, account.equity, `cycle:${timeframe}`))
 
   const evaluations = await Promise.all(
     markets.map(async (market) => {
@@ -92,7 +134,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
   const pendingEntries: PendingEntry[] = []
   const livePositions = [...positions]
   // Planned loss at the stops of everything open; grows as this cycle adds entries.
-  let openRisk = openRiskFor(positions, openOrders)
+  let openRisk = openRiskFor(positions, openOrders, knownStops)
   const results: MarketCycleResult[] = []
 
   for (const ev of ordered) {
@@ -138,7 +180,14 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
         const order = await closePosition(market)
         const idx = livePositions.findIndex((p) => p.symbol === position.symbol)
         if (idx >= 0) livePositions.splice(idx, 1)
-        openRisk = openRiskFor(livePositions, openOrders)
+        openRisk = openRiskFor(livePositions, openOrders, knownStops)
+        await journal(`close ${market.id}`, (s) =>
+          s.closeTrade(mode, market.id, {
+            exitPrice: order?.filledAvgPrice ?? price,
+            exitReason: `signal: ${signal.reason}`,
+            pnl: position.unrealizedPl,
+          }),
+        )
         results.push({
           ...base,
           action: 'closed',
@@ -181,6 +230,22 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
         stopDistance: sizing.stopDistance,
       })
       openRisk += sizing.riskAmount
+      await journal(`open ${market.id}`, (s) =>
+        s.openTrade({
+          mode,
+          marketId: market.id,
+          symbol: market.symbol,
+          side,
+          qty: sizing.qty,
+          entryOrderId: placed.orderId,
+          entryPrice: placed.fillPrice,
+          stopPrice: placed.stopPrice,
+          stopDistance: sizing.stopDistance,
+          riskAmount: sizing.riskAmount,
+          equityAtEntry: account.equity,
+          entryReason: signal.reason,
+        }),
+      )
 
       pendingEntries.push({ marketId: market.id, side })
       livePositions.push({
@@ -208,11 +273,12 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
 
   return {
     timeframe,
-    mode: tradingMode(),
+    mode,
     ranAt: new Date().toISOString(),
     botEnabled: enabled,
     equityMarketOpen: clock.isOpen,
     protection,
     results,
+    journal: { enabled: Boolean(store), errors: journalErrors },
   }
 }
