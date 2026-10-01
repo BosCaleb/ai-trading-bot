@@ -38,11 +38,11 @@ export function ReportsPanel({ smsConfigured, configured }: { smsConfigured: boo
     }
   }
 
-  // Cron fires at 05:00 and 19:30 UTC, i.e. 07:00 and 21:30 GMT+2.
+  // Cron fires at 05:00 and 19:00 UTC, i.e. 07:00 and 21:00 SA time (GMT+2).
   const morningUtc = new Date()
   morningUtc.setUTCHours(5, 0, 0, 0)
   const eveningUtc = new Date()
-  eveningUtc.setUTCHours(19, 30, 0, 0)
+  eveningUtc.setUTCHours(19, 0, 0, 0)
 
   return (
     <section aria-labelledby="reports-heading" className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
