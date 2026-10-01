@@ -25,8 +25,9 @@ export const RISK_RULES = [
   },
   {
     id: 'corr',
-    title: 'No doubled-up index longs',
-    detail: 'S&P 500 and NASDAQ share a correlation group. If one is long, the other cannot go long. Prevents a single macro move from hitting two positions.',
+    title: 'No doubled-up index bets',
+    detail:
+      'S&P 500 and NASDAQ share a correlation group. If one is long the other cannot go long, and if one is short the other cannot go short, including entries placed earlier in the same cycle. Prevents a single macro move from hitting two positions.',
   },
   {
     id: 'gross',
@@ -82,10 +83,15 @@ export interface FilterInput {
   market: MarketConfig
   action: SignalAction
   positions: PositionInfo[]
-  /** Markets that were opened long earlier in this same cycle but may not yet appear in broker positions */
-  pendingLongMarketIds: string[]
+  /** Entries placed earlier in this same cycle that may not yet appear in broker positions */
+  pendingEntries: PendingEntry[]
   equity: number
   proposedNotional: number
+}
+
+export interface PendingEntry {
+  marketId: string
+  side: 'long' | 'short'
 }
 
 export interface FilterResult {
@@ -99,7 +105,7 @@ function positionForMarket(positions: PositionInfo[], market: MarketConfig): Pos
 }
 
 export function applyFilters(input: FilterInput): FilterResult {
-  const { market, action, positions, pendingLongMarketIds, equity, proposedNotional } = input
+  const { market, action, positions, pendingEntries, equity, proposedNotional } = input
 
   if (action !== 'enter_long' && action !== 'enter_short') return { ok: true, reason: 'No entry to filter' }
 
@@ -111,13 +117,14 @@ export function applyFilters(input: FilterInput): FilterResult {
     return { ok: false, reason: 'Shorting disabled for this market' }
   }
 
-  if (action === 'enter_long' && market.correlationGroup) {
+  if (market.correlationGroup) {
+    const side = action === 'enter_long' ? 'long' : 'short'
     const siblings = MARKETS.filter((m) => m.id !== market.id && m.correlationGroup === market.correlationGroup)
     for (const sibling of siblings) {
-      const siblingPos = positionForMarket(positions, sibling)
-      const pending = pendingLongMarketIds.includes(sibling.id)
-      if ((siblingPos && siblingPos.side === 'long') || pending) {
-        return { ok: false, reason: `Correlation filter: ${sibling.name} is already long` }
+      const held = positionForMarket(positions, sibling)?.side === side
+      const pending = pendingEntries.some((p) => p.marketId === sibling.id && p.side === side)
+      if (held || pending) {
+        return { ok: false, reason: `Correlation filter: ${sibling.name} is already ${side}` }
       }
     }
   }
@@ -133,14 +140,21 @@ export function applyFilters(input: FilterInput): FilterResult {
   return { ok: true, reason: 'Passed all filters' }
 }
 
-/** Whether the correlation filter is currently blocking one of the index markets. */
-export function correlationFilterState(positions: PositionInfo[]): { active: boolean; longMarket?: MarketConfig; blockedMarket?: MarketConfig } {
+export interface CorrelationState {
+  active: boolean
+  side?: 'long' | 'short'
+  heldMarket?: MarketConfig
+  blockedMarket?: MarketConfig
+}
+
+/** Whether the correlation filter is currently blocking one index market from matching the other's direction. */
+export function correlationFilterState(positions: PositionInfo[]): CorrelationState {
   const indexMarkets = MARKETS.filter((m) => m.correlationGroup === 'us_index')
   for (const m of indexMarkets) {
     const pos = positionForMarket(positions, m)
-    if (pos && pos.side === 'long') {
+    if (pos) {
       const blocked = indexMarkets.find((x) => x.id !== m.id)
-      return { active: true, longMarket: m, blockedMarket: blocked }
+      return { active: true, side: pos.side, heldMarket: m, blockedMarket: blocked }
     }
   }
   return { active: false }

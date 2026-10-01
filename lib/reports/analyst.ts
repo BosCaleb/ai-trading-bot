@@ -50,7 +50,8 @@ export function describeSnapshot(snapshot: DashboardSnapshot): string {
     lines.push(`US equity session: ${snapshot.clock.isOpen ? 'OPEN' : 'CLOSED'}. Next open ${snapshot.clock.nextOpen}, next close ${snapshot.clock.nextClose}.`)
   }
   if (snapshot.risk.correlation.active) {
-    lines.push(`Correlation filter active: ${snapshot.risk.correlation.longMarket} is long, so ${snapshot.risk.correlation.blockedMarket} cannot go long.`)
+    const c = snapshot.risk.correlation
+    lines.push(`Correlation filter active: ${c.heldMarket} is ${c.side}, so ${c.blockedMarket} cannot also go ${c.side}.`)
   }
 
   lines.push('')
@@ -93,7 +94,7 @@ const INSTRUCTIONS = `You are the analyst for an automated five-market trading d
 - Mean reversion on 15-minute candles for the S&P 500 (SPY) and NASDAQ 100 (QQQ)
 - Momentum breakouts on 1-hour candles for Bitcoin
 - Trend following on 4-hour candles for Gold (GLD) and Crude Oil (USO)
-Every trade carries a hard 1% stop, sizing scales down with volatility, and SPY/QQQ can never both be long.
+Every trade carries a hard 1% stop, sizing scales down with volatility, and SPY/QQQ can never hold positions in the same direction.
 
 You write SMS messages for the desk owner. Rules:
 - Plain text only. No markdown, no headers, no bullet symbols, no emojis.

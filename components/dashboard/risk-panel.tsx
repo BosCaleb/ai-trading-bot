@@ -22,8 +22,11 @@ export function RiskPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
       tone: 'idle',
     },
     corr: risk.correlation.active
-      ? { text: `${risk.correlation.longMarket} long. ${risk.correlation.blockedMarket} long blocked.`, tone: 'active' }
-      : { text: 'Neither index is long. Both eligible.', tone: 'idle' },
+      ? {
+          text: `${risk.correlation.heldMarket} ${risk.correlation.side}. ${risk.correlation.blockedMarket} ${risk.correlation.side} blocked.`,
+          tone: 'active',
+        }
+      : { text: 'Neither index is in a position. Both eligible.', tone: 'idle' },
     gross: {
       text: snapshot.account ? `${fmtPct(risk.grossExposurePct, 0, false)} of 100% cap in use` : 'Waiting for broker',
       tone: risk.grossExposurePct > 0.8 ? 'active' : 'idle',

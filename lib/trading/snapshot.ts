@@ -52,7 +52,7 @@ export interface DashboardSnapshot {
     stopLossPct: number
     grossExposure: number
     grossExposurePct: number
-    correlation: { active: boolean; longMarket?: string; blockedMarket?: string }
+    correlation: { active: boolean; side?: 'long' | 'short'; heldMarket?: string; blockedMarket?: string }
   }
   error: string | null
 }
@@ -155,7 +155,7 @@ export async function buildSnapshot(): Promise<DashboardSnapshot> {
         ...base.risk,
         grossExposure: gross,
         grossExposurePct: account.equity > 0 ? gross / account.equity : 0,
-        correlation: { active: corr.active, longMarket: corr.longMarket?.name, blockedMarket: corr.blockedMarket?.name },
+        correlation: { active: corr.active, side: corr.side, heldMarket: corr.heldMarket?.name, blockedMarket: corr.blockedMarket?.name },
       },
     }
   } catch (err) {

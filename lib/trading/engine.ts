@@ -11,7 +11,7 @@ import {
 } from '@/lib/broker/alpaca'
 import { marketsForTimeframe } from './markets'
 import { type ProtectionResult, ensureStops } from './protection'
-import { applyFilters, positionSize, stopPriceFor } from './risk'
+import { type PendingEntry, applyFilters, positionSize, stopPriceFor } from './risk'
 import { STRATEGIES } from './strategies'
 import type { MarketConfig, PositionInfo, PositionSide, Signal, Timeframe } from './types'
 
@@ -89,7 +89,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
     return diff !== 0 ? diff : (b.signal?.strength ?? 0) - (a.signal?.strength ?? 0)
   })
 
-  const pendingLongs: string[] = []
+  const pendingEntries: PendingEntry[] = []
   const livePositions = [...positions]
   const results: MarketCycleResult[] = []
 
@@ -153,7 +153,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
         market,
         action: signal.action,
         positions: livePositions,
-        pendingLongMarketIds: pendingLongs,
+        pendingEntries,
         equity: account.equity,
         proposedNotional: sizing.notional,
       })
@@ -169,7 +169,7 @@ export async function runCycle(timeframe: Timeframe): Promise<CycleResult> {
       const stop = stopPriceFor(price, side)
       const placed = await submitEntry({ market, side, qty: sizing.qty, referencePrice: price, stopPrice: stop })
 
-      if (side === 'long') pendingLongs.push(market.id)
+      pendingEntries.push({ marketId: market.id, side })
       livePositions.push({
         symbol: market.symbol.replace('/', ''),
         side,

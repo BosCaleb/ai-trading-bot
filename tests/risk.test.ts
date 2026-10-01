@@ -39,7 +39,7 @@ describe('positionSize', () => {
 })
 
 describe('applyFilters', () => {
-  const base = { positions: [], pendingLongMarketIds: [], equity: 100_000, proposedNotional: 10_000 }
+  const base = { positions: [], pendingEntries: [], equity: 100_000, proposedNotional: 10_000 }
 
   it('passes a clean entry', () => {
     expect(applyFilters({ ...base, market: market('spx'), action: 'enter_long' }).ok).toBe(true)
@@ -58,15 +58,28 @@ describe('applyFilters', () => {
     expect(applyFilters({ ...base, market: market('btc'), action: 'enter_short' }).ok).toBe(false)
   })
 
-  it('blocks QQQ long while SPY is long, but allows a QQQ short', () => {
+  it('blocks QQQ long while SPY is long, but allows the opposite direction', () => {
     const positions = [position({ symbol: 'SPY', side: 'long' })]
-    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_long', positions }).reason).toMatch(/Correlation/)
+    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_long', positions }).reason).toMatch(/Correlation.*already long/)
     expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_short', positions }).ok).toBe(true)
   })
 
-  it('counts longs opened earlier in the same cycle that the broker does not show yet', () => {
-    const r = applyFilters({ ...base, market: market('ndx'), action: 'enter_long', pendingLongMarketIds: ['spx'] })
-    expect(r.ok).toBe(false)
+  it('blocks QQQ short while SPY is short, but allows a QQQ long', () => {
+    const positions = [position({ symbol: 'SPY', side: 'short', marketValue: -5000 })]
+    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_short', positions }).reason).toMatch(/Correlation.*already short/)
+    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_long', positions }).ok).toBe(true)
+  })
+
+  it('counts same-direction entries placed earlier in the same cycle that the broker does not show yet', () => {
+    const at = (side: 'long' | 'short') => [{ marketId: 'spx', side }]
+    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_long', pendingEntries: at('long') }).ok).toBe(false)
+    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_short', pendingEntries: at('short') }).ok).toBe(false)
+    expect(applyFilters({ ...base, market: market('ndx'), action: 'enter_short', pendingEntries: at('long') }).ok).toBe(true)
+  })
+
+  it('does not apply the correlation filter to markets outside the group', () => {
+    const positions = [position({ symbol: 'SPY', side: 'long' })]
+    expect(applyFilters({ ...base, market: market('gold'), action: 'enter_long', positions }).ok).toBe(true)
   })
 
   it('enforces the gross exposure cap using absolute values', () => {
@@ -77,11 +90,12 @@ describe('applyFilters', () => {
 })
 
 describe('correlationFilterState', () => {
-  it('reports which index market is blocked', () => {
-    const s = correlationFilterState([position({ symbol: 'QQQ', side: 'long' })])
-    expect(s.active).toBe(true)
-    expect(s.longMarket?.id).toBe('ndx')
-    expect(s.blockedMarket?.id).toBe('spx')
-    expect(correlationFilterState([position({ symbol: 'QQQ', side: 'short' })]).active).toBe(false)
+  it('reports which index market is blocked and in which direction', () => {
+    const long = correlationFilterState([position({ symbol: 'QQQ', side: 'long' })])
+    expect(long).toMatchObject({ active: true, side: 'long' })
+    expect(long.heldMarket?.id).toBe('ndx')
+    expect(long.blockedMarket?.id).toBe('spx')
+    expect(correlationFilterState([position({ symbol: 'QQQ', side: 'short' })])).toMatchObject({ active: true, side: 'short' })
+    expect(correlationFilterState([position({ symbol: 'GLD' })]).active).toBe(false)
   })
 })
