@@ -1,0 +1,9 @@
+{
+  "crons": [
+    { "path": "/api/cron/trade/15m", "schedule": "1,16,31,46 * * * *" },
+    { "path": "/api/cron/trade/1h", "schedule": "2 * * * *" },
+    { "path": "/api/cron/trade/4h", "schedule": "3 */4 * * *" },
+    { "path": "/api/cron/report/morning", "schedule": "0 5 * * *" },
+    { "path": "/api/cron/report/evening", "schedule": "30 19 * * *" }
+  ]
+}
