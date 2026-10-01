@@ -1,7 +1,7 @@
 import { KeyRound } from 'lucide-react'
 
-const BROKER_VARS = ['ALPACA_API_KEY', 'ALPACA_API_SECRET']
-const OPTIONAL_VARS = ['ALPACA_PAPER (default true)', 'CRON_SECRET', 'BOT_ENABLED (default true)']
+const BROKER_VARS = ['ALPACA_API_KEY', 'ALPACA_API_SECRET', 'DASHBOARD_PASSWORD', 'CRON_SECRET']
+const OPTIONAL_VARS = ['ALPACA_PAPER (default true)', 'DASHBOARD_USER', 'BOT_ENABLED (default true)']
 const SMS_VARS = ['BULKSMS_TOKEN_ID', 'BULKSMS_TOKEN_SECRET', 'ALERT_TO_NUMBERS (comma-separated)']
 
 export function SetupNotice({ smsConfigured }: { smsConfigured: boolean }) {
